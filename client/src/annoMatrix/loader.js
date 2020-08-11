@@ -12,7 +12,7 @@ import { _whereCacheCreate } from "./whereCache";
 import AnnoMatrix from "./annoMatrix";
 import PromiseLimit from "../util/promiseLimit";
 
-const promiseThrottle = new PromiseLimit(5);
+const promiseThrottle = new PromiseLimit(1);
 
 export default class AnnoMatrixLoader extends AnnoMatrix {
   /*
