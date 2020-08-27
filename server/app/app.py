@@ -1,21 +1,19 @@
 import datetime
 import logging
+from functools import wraps
+from http import HTTPStatus
 
-from flask import Flask, redirect, current_app, make_response, render_template, abort
-from flask import Blueprint, request
+from flask import Flask, redirect, current_app, make_response, render_template, abort, Blueprint, request, \
+    send_from_directory
 from flask_restful import Api, Resource
 from server_timing import Timing as ServerTiming
 
-from http import HTTPStatus
-
 import server.common.rest as common_rest
-from server.common.errors import DatasetAccessError, RequestException
-from server.common.utils import path_join, Float32JSONEncoder
 from server.common.data_locator import DataLocator
+from server.common.errors import DatasetAccessError, RequestException
 from server.common.health import health_check
+from server.common.utils.utils import path_join, Float32JSONEncoder
 from server.data_common.matrix_loader import MatrixDataLoader
-
-from functools import wraps
 
 webbp = Blueprint("webapp", "server.common.web", template_folder="templates")
 
@@ -139,6 +137,18 @@ def get_data_adaptor(url_dataroot=None, dataset=None):
     return cache_manager.data_adaptor(dataset_key, datapath, config)
 
 
+def requires_authentication(func):
+    @wraps(func)
+    def wrapped_function(self, *args, **kwargs):
+        auth = current_app.auth
+        if auth.is_user_authenticated():
+            return func(self, *args, **kwargs)
+        else:
+            return make_response("not authenticated", HTTPStatus.UNAUTHORIZED)
+
+    return wrapped_function
+
+
 def rest_get_data_adaptor(func):
     @wraps(func)
     def wrapped_function(self, dataset=None):
@@ -164,11 +174,11 @@ def dataroot_test_index():
     server_config = config.server_config
 
     auth = server_config.auth
-    if auth.is_valid():
-        if server_config.auth.is_authenticated():
-            data += f"<p>Logged in as {auth.get_userid()} / {auth.get_username()}</p>"
+    if auth.is_valid_authentication_type():
+        if server_config.auth.is_user_authenticated():
+            data += f"<p>Logged in as {auth.get_user_id()} / {auth.get_user_name()} / {auth.get_user_email()}</p>"
         if auth.requires_client_login():
-            if server_config.auth.is_authenticated():
+            if server_config.auth.is_user_authenticated():
                 data += "<p><a href='/logout'>Logout</a></p>"
             else:
                 data += "<p><a href='/login'>Login</a></p>"
@@ -231,12 +241,20 @@ class ConfigAPI(DatasetResource):
         return common_rest.config_get(current_app.app_config, data_adaptor)
 
 
+class UserInfoAPI(DatasetResource):
+    @cache_control_always(no_store=True)
+    @rest_get_data_adaptor
+    def get(self, data_adaptor):
+        return common_rest.userinfo_get(current_app.app_config, data_adaptor)
+
+
 class AnnotationsObsAPI(DatasetResource):
-    @cache_control(public=True, max_age=ONE_WEEK)
+    @cache_control(public=True, no_store=True)
     @rest_get_data_adaptor
     def get(self, data_adaptor):
         return common_rest.annotations_obs_get(request, data_adaptor)
 
+    @requires_authentication
     @cache_control(no_store=True)
     @rest_get_data_adaptor
     def put(self, data_adaptor):
@@ -298,6 +316,7 @@ def get_api_resources(bp_api, url_dataroot=None):
     # Initialization routes
     add_resource(SchemaAPI, "/schema")
     add_resource(ConfigAPI, "/config")
+    add_resource(UserInfoAPI, "/userinfo")
     # Data routes
     add_resource(AnnotationsObsAPI, "/annotations/obs")
     add_resource(AnnotationsVarAPI, "/annotations/var")
@@ -317,7 +336,7 @@ class Server:
         pass
 
     def __init__(self, app_config):
-        self.app = Flask(__name__, static_folder="../common/web/static")
+        self.app = Flask(__name__, static_folder=None)
         self._before_adding_routes(self.app, app_config)
         self.app.json_encoder = Float32JSONEncoder
         server_config = app_config.server_config
@@ -351,15 +370,29 @@ class Server:
                     lambda dataset, url_dataroot=url_dataroot: dataset_index(url_dataroot, dataset),
                     methods=["GET"],
                 )
+                self.app.add_url_rule(
+                    f"/{url_dataroot}/<dataset>/static/<path:filename>",
+                    f"static_assets_{url_dataroot}",
+                    view_func=lambda dataset, filename: send_from_directory("../common/web/static", filename),
+                    methods=["GET"]
+                )
 
         else:
             bp_api = Blueprint("api", __name__, url_prefix=api_version)
             resources = get_api_resources(bp_api)
             self.app.register_blueprint(resources.blueprint)
-
-        self.app.auth = server_config.auth
-        if self.app.auth.requires_client_login():
-            self.app.auth.add_url_rules(self.app)
+            self.app.add_url_rule(
+                "/static/<path:filename>",
+                "static_assets",
+                view_func=lambda filename: send_from_directory("../common/web/static", filename),
+                methods=["GET"]
+            )
 
         self.app.matrix_data_cache_manager = server_config.matrix_data_cache_manager
         self.app.app_config = app_config
+
+        auth = server_config.auth
+        self.app.auth = auth
+        if auth.requires_client_login():
+            auth.add_url_rules(self.app)
+        auth.complete_setup(self.app)

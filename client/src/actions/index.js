@@ -41,6 +41,17 @@ async function configFetch(dispatch) {
   });
 }
 
+async function userInfoFetch(dispatch) {
+  return fetchJson("userinfo").then((response) => {
+    const { userinfo } = response || {};
+    dispatch({
+      type: "userinfo load complete",
+      userinfo,
+    });
+    return userinfo;
+  });
+}
+
 function prefetchEmbeddings(annoMatrix) {
   /*
   prefetch requests for all embeddings
@@ -58,10 +69,11 @@ const doInitialDataLoad = () =>
     dispatch({ type: "initial data load start" });
 
     try {
-      const [, schema] = await Promise.all([
+      const [config, schema] = await Promise.all([
         configFetch(dispatch),
         schemaFetch(dispatch),
         userColorsFetchAndLoad(dispatch),
+        userInfoFetch(dispatch),
       ]);
 
       const baseDataUrl = `${globals.API.prefix}${globals.API.version}`;
@@ -75,6 +87,15 @@ const doInitialDataLoad = () =>
         obsCrossfilter,
       });
       dispatch({ type: "initial data load complete" });
+
+      const defaultEmbedding = config?.parameters?.["default_embedding"];
+      const layoutSchema = schema?.schema?.layout?.obs ?? [];
+      if (
+        defaultEmbedding &&
+        layoutSchema.some((s) => s.name === defaultEmbedding)
+      ) {
+        dispatch(embActions.layoutChoiceAction(defaultEmbedding));
+      }
     } catch (error) {
       dispatch({ type: "initial data load error", error });
     }

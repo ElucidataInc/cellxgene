@@ -13,6 +13,8 @@ import {
 @connect((state) => ({
   idhash: state.config?.parameters?.["annotations-user-data-idhash"] ?? null,
   annotations: state.annotations,
+  auth: state.config?.authentication,
+  userinfo: state.userinfo,
   writableCategoriesEnabled: state.config?.parameters?.annotations ?? false,
 }))
 class FilenameDialog extends React.Component {
@@ -90,12 +92,19 @@ class FilenameDialog extends React.Component {
   };
 
   render() {
-    const { writableCategoriesEnabled, annotations, idhash } = this.props;
+    const {
+      writableCategoriesEnabled,
+      annotations,
+      idhash,
+      userinfo,
+    } = this.props;
     const { filenameText } = this.state;
 
     return writableCategoriesEnabled &&
+      annotations.promptForFilename &&
       !annotations.dataCollectionNameIsReadOnly &&
-      !annotations.dataCollectionName ? (
+      !annotations.dataCollectionName &&
+      userinfo.is_authenticated ? (
       <Dialog
         icon="tag"
         title="Annotations Collection"
